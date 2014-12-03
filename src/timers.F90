@@ -258,6 +258,26 @@ contains
   end function get_time
 
 
+  subroutine calc_total_time(total)
+    ! Sum time in all outermost contexts. We'll call this the total.
+    implicit none
+    real(8), intent(out) :: total
+
+    integer :: id, ic
+    type(timer), pointer   :: t
+    type(context), pointer :: c
+
+    total = 0.d0
+    do id=1,ntimers
+       t => timers(id)
+       do ic=1,size(t%contexts)
+          c => t%contexts(ic)
+          if (c%key == 0) total = total + c%tsum
+       end do
+    end do
+  end subroutine calc_total_time
+
+
   subroutine print_all_timers_flat(unit)
     implicit none
     integer, intent(in) :: unit
@@ -265,13 +285,22 @@ contains
     type(timer), pointer   :: t
     type(context), pointer :: c
 
-    real(8) :: time, t1
+    real(8) :: time, total
     integer(8) :: ncalls
 
-    write (unit,'(a2,tr1,a46,tr2,a14,tr2,a10,tr2,a12)') &
+    if (current_context .ne. 0) then
+       write (*,*) "WARNING: There are timers still running. They should be &
+            &stopped"
+       write (*,*) "before printing out the timers. Some numbers may be&
+            & incorrect."
+    end if
+
+    call calc_total_time(total)
+
+    write (unit,'(a2,tr1,a46,tr2,a14,tr2,a10,tr2,a7)') &
          "id", "Timer name                                    ", &
-         "total time (s)", "# of calls", "% of timer 1"
-    write (unit,'(2("*"),tr1,46("*"),tr2,14("*"),tr2,10("*"),tr2,12("*"))')
+         "total time (s)", "# of calls", "% total"
+    write (unit,'(2("*"),tr1,46("*"),tr2,14("*"),tr2,10("*"),tr2,7("*"))')
     do id=1,ntimers
        t => timers(id)
        time = 0.d0
@@ -283,22 +312,21 @@ contains
              ncalls = ncalls + c%ncalls
           end if
        end do
-       if (id == 1) t1 = time
-       !write (unit,'(i0,t4,a,t52,f14.4,t68,i0,t80,l)') &
-       !     t%id, t%name, time, ncalls, btest(current_context,id-1)
-       write (unit,'(i2,tr1,a46,tr2,f14.4,tr2,i10,tr2,f11.2,"%")') &
-            t%id, t%name, time, ncalls, time/t1 * 100.d0
+       write (unit,'(i2,tr1,a46,tr2,f14.4,tr2,i10,tr2,f6.2,"%")') &
+            t%id, t%name, time, ncalls, time/total * 100.d0
     end do
   end subroutine print_all_timers_flat
 
 
-  recursive subroutine print_all_timers_aux(unit,icontext,depth,nsub,tsub,prnt)
+  recursive subroutine print_all_timers_aux(unit,icontext,depth,nsub,tsub,&
+       total,prnt)
     ! This might be slow for larger numbers of timers.
     implicit none
     integer,    intent(in)  :: unit,depth
     integer(8), intent(in)  :: icontext
     integer,    intent(out) :: nsub
     real(8),    intent(out) :: tsub
+    real(8),    intent(in)  :: total
     logical,    intent(in)  :: prnt
 
     integer(8) :: isubcontext
@@ -321,20 +349,22 @@ contains
              isubcontext = ibset(icontext,id-1)
              if (prnt) then
                 write (str,'(a,a)') spaces(1:depth*2), trim(t%name)
-                write (unit,'(i0,t4,a,t52,f14.4,t68,i0)') &
-                     id, str, c%tsum, c%ncalls
+                write (unit,'(i2,tr1,a46,tr2,f14.4,tr2,i10,tr2,f6.2,"%")') &
+                     id, str, c%tsum, c%ncalls, c%tsum/total*100.d0
              end if
              ! Add up the amount of time spent in subtimers
-             call print_all_timers_aux(unit,isubcontext,depth+1,nsub1,tsub1,.false.)
+             call print_all_timers_aux(unit,isubcontext,depth+1,nsub1,tsub1,&
+                  total,.false.)
              if (nsub1 > 0 .and. prnt) then
                 ! Print amount of time spent in this timer, and not in subtimers
                 tinternal = c%tsum - tsub1
                 write (str,'(a,a)') spaces(1:(depth+1)*2), '(internal)'
-                write (unit,'(a,t4,a,t52,f14.4,t68,a)') &
-                     '', str, tinternal, ''
+                write (unit,'(a2,tr1,a46,tr2,f14.4,tr2,a10,tr2,f6.2,"%")') &
+                     '', str, tinternal, '-', tinternal/total*100.d0
              end if
              ! Print all the subtimers
-             call print_all_timers_aux(unit,isubcontext,depth+1,nsub1,tsub1,prnt)
+             call print_all_timers_aux(unit,isubcontext,depth+1,nsub1,tsub1,&
+                  total,prnt)
           end if
        end do
     end do
@@ -346,16 +376,16 @@ contains
     integer, intent(in) :: unit
 
     integer :: nsub
-    real(8) :: tsub
+    real(8) :: tsub, total
 
-    write (unit,'(a,t4,a,t52,a,t68,a)') &
+    call calc_total_time(total)
+
+    write (unit,'(a2,tr1,a46,tr2,a14,tr2,a10,tr2,a7)') &
          "id", "Timer name                                    ", &
-         "total time (s)", "# of calls"
-    write (unit,'(a,t4,a,t52,a,t68,a)') &
-         "**", "**********************************************", &
-         "**************", "**********"
+         "total time (s)", "# of calls", "% total"
+    write (unit,'(2("*"),tr1,46("*"),tr2,14("*"),tr2,10("*"),tr2,7("*"))')
 
-    call print_all_timers_aux(unit,0_8,0,nsub,tsub,.true.)
+    call print_all_timers_aux(unit,0_8,0,nsub,tsub,total,.true.)
   end subroutine print_all_timers
 
 
@@ -363,12 +393,13 @@ contains
     ! Not an automated test. Just some scratch code to try it out.
     implicit none
 
-    integer :: id1,id2,id3, j=0,i,k
+    integer :: id1,id2,id3,id4, j=0,i,k
     real(8) :: t3
 
     call add_timer("outer timer",id1)
     call add_timer("inner timer",id2)
     call add_timer("inner timer 2",id3)
+    call add_timer("outer timer 2",id4)
 
     call start_timer(id1)
 
@@ -406,6 +437,14 @@ contains
     call stop_timer(id3)
 
     call stop_timer(id1)
+
+    call start_timer(id4)
+    do k = 1,1000
+       do i=1,500000
+          j = j + i
+       end do
+    end do
+    call stop_timer(id4)
 
     call print_all_timers_flat(6)
     write (6,*) ""
