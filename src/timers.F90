@@ -1,3 +1,12 @@
+! timers.F90: Timers module for Fortran 90
+! - Allows you to define and start/stop timers.
+! - Handles nested calls of timers and provides a detailed printout with
+!   percentages of the "total" time (defined as the time spent in all outermost
+!   contexts).
+! - Supports up to 63 timers
+! - To use: Call add_timer(), start_timer(), stop_timer(),
+!   print_all_timers_flat(), and print_all_timers(). See example at the bottom.
+! C.N.G 2010, 2014
 module mod_timers
   implicit none
   save
@@ -11,7 +20,11 @@ module mod_timers
   integer(8) :: count_rate  ! Conversion for system_clock()
 
 
-  ! Timing info for a timer in a particular context
+  ! Timing info for a timer in a particular context.
+  ! When a timer is started, there are usually other timers going already.
+  ! The set of which timers are already going is called a "context", and
+  ! is represented by a set of binary on/off flags (the key).
+  ! We record times in each context separately.
   type context
      ! Binary description of the context
      integer(8) :: key
@@ -297,10 +310,10 @@ contains
 
     call calc_total_time(total)
 
-    write (unit,'(a2,tr1,a46,tr2,a14,tr2,a10,tr2,a7)') &
+    write (unit,'(a2,tr1,a46,tr2,a10,tr2,a12,tr2,a7)') &
          "id", "Timer name                                    ", &
-         "total time (s)", "# of calls", "% total"
-    write (unit,'(2("*"),tr1,46("*"),tr2,14("*"),tr2,10("*"),tr2,7("*"))')
+         "# of calls", "time (s)", "% total"
+    write (unit,'(2("*"),tr1,46("*"),tr2,10("*"),tr2,12("*"),tr2,7("*"))')
     do id=1,ntimers
        t => timers(id)
        time = 0.d0
@@ -312,15 +325,15 @@ contains
              ncalls = ncalls + c%ncalls
           end if
        end do
-       write (unit,'(i2,tr1,a46,tr2,f14.4,tr2,i10,tr2,f6.2,"%")') &
-            t%id, t%name, time, ncalls, time/total * 100.d0
+       write (unit,'(i2,tr1,a46,tr2,i10,tr2,f12.4,tr2,f6.2,"%")') &
+            t%id, t%name, ncalls, time, time/total * 100.d0
     end do
   end subroutine print_all_timers_flat
 
 
   recursive subroutine print_all_timers_aux(unit,icontext,depth,nsub,tsub,&
        total,prnt)
-    ! This might be slow for larger numbers of timers.
+    ! Recursively print all timers in a given context, and their subtimers.
     implicit none
     integer,    intent(in)  :: unit,depth
     integer(8), intent(in)  :: icontext
@@ -349,8 +362,8 @@ contains
              isubcontext = ibset(icontext,id-1)
              if (prnt) then
                 write (str,'(a,a)') spaces(1:depth*2), trim(t%name)
-                write (unit,'(i2,tr1,a46,tr2,f14.4,tr2,i10,tr2,f6.2,"%")') &
-                     id, str, c%tsum, c%ncalls, c%tsum/total*100.d0
+                write (unit,'(i2,tr1,a46,tr2,i10,tr2,f12.4,tr2,f6.2,"%")') &
+                     id, str, c%ncalls, c%tsum, c%tsum/total*100.d0
              end if
              ! Add up the amount of time spent in subtimers
              call print_all_timers_aux(unit,isubcontext,depth+1,nsub1,tsub1,&
@@ -359,8 +372,8 @@ contains
                 ! Print amount of time spent in this timer, and not in subtimers
                 tinternal = c%tsum - tsub1
                 write (str,'(a,a)') spaces(1:(depth+1)*2), '(internal)'
-                write (unit,'(a2,tr1,a46,tr2,f14.4,tr2,a10,tr2,f6.2,"%")') &
-                     '', str, tinternal, '-', tinternal/total*100.d0
+                write (unit,'(a2,tr1,a46,tr2,a10,tr2,f12.4,tr2,f6.2,"%")') &
+                     '', str, '-', tinternal, tinternal/total*100.d0
              end if
              ! Print all the subtimers
              call print_all_timers_aux(unit,isubcontext,depth+1,nsub1,tsub1,&
@@ -380,10 +393,10 @@ contains
 
     call calc_total_time(total)
 
-    write (unit,'(a2,tr1,a46,tr2,a14,tr2,a10,tr2,a7)') &
+    write (unit,'(a2,tr1,a46,tr2,a10,tr2,a12,tr2,a7)') &
          "id", "Timer name                                    ", &
-         "total time (s)", "# of calls", "% total"
-    write (unit,'(2("*"),tr1,46("*"),tr2,14("*"),tr2,10("*"),tr2,7("*"))')
+         "# of calls", "time (s)", "% total"
+    write (unit,'(2("*"),tr1,46("*"),tr2,10("*"),tr2,12("*"),tr2,7("*"))')
 
     call print_all_timers_aux(unit,0_8,0,nsub,tsub,total,.true.)
   end subroutine print_all_timers
