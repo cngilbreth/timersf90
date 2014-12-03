@@ -1,38 +1,46 @@
 module mod_timers
   implicit none
+  save
 
+  ! There are two ways to record the time:
+  !  1. cpu_time measures CPU time (excludes time spent in other programs)
+  !  2. system_clock measures walltime
+  ! cpu_time is probably preferred.
   integer, parameter :: CPU_TIME_ = 1, SYSTEM_CLOCK_ = 2
-  ! Change this to CPU_TIME_ to use the cpu_time intrinsic
-  integer, parameter :: TIME_TYPE = SYSTEM_CLOCK_
-
-  ! TODO: Replace this with use of the count_rate argument to system_clock()
-  real,    parameter :: SYS_TIME_CONV = 1./10000
+  integer, parameter :: TIME_TYPE = CPU_TIME_
+  integer(8) :: count_rate  ! Conversion for system_clock()
 
 
+  ! Timing info for a timer in a particular context
   type context
+     ! Binary description of the context
      integer(8) :: key
+     ! # of times this timer has been started in this context
      integer(8) :: ncalls
      ! for cpu_time
-     real    :: tstart, tstop
-     ! for system_time (# of milliseconds)
-     integer :: itstart, itstop
-     ! Total time so far
+     real(8)    :: tstart, tstop
+     ! for system_clock
+     integer(8) :: itstart, itstop
+     ! Total time so far in this context
      real(8) :: tsum
   end type context
 
 
+  ! Structure to identify a timer and the contexts in which it's been called
   type timer
      integer :: id
      character(len=64) :: name
+     ! Array of context-specific timer structures
      type(context), allocatable :: contexts(:)
+     ! When this timer is running, this is the index of the relevant context in
+     ! contexts(:). When not running, this is the index of the last context in
+     ! which it was executed.
      integer :: last_context_index
   end type timer
 
-
   integer :: ntimers = 0
   type(timer), allocatable, target :: timers(:)
-  integer :: current_context = 0
-
+  integer(8) :: current_context = 0
 
 contains
 
@@ -55,21 +63,26 @@ contains
     integer, intent(out) :: id
     type(timer), pointer :: t
 
+    integer(8) :: count
+
     call allocate_timers_mabye(1)
+    if (count_rate .eq. 0) then
+       call system_clock(count,count_rate)
+    end if
 
     ntimers = ntimers + 1
-    id = ntimers 
+    id = ntimers
     if (id > bit_size(current_context)-1) then
-       ! Can't store a context for > 63 timers in an 8-byte signed integer.
+       ! Can't store a context for > 63 timers in an 8-byte integer.
        stop "Error: too many timers!"
     end if
 
     t => timers(id)
     t%id = id
-    t%name       = name
+    t%name = name
     allocate(t%contexts(4))
     call init_context(t%contexts)
-    t%last_context_index = -1
+    t%last_context_index = 1
   end subroutine add_timer
 
 
@@ -111,7 +124,7 @@ contains
     integer, intent(in) :: id
 
     type(timer),   pointer :: t
-    type(context), pointer :: contexts(:), c, tmp(:)
+    type(context), pointer :: contexts(:), c
     integer :: i, nc
 
     if (id < 1 .or. id > ntimers) stop "Error: invalid timer id"
@@ -159,12 +172,13 @@ contains
 
     type(context), allocatable :: tmp(:)
     integer :: nc
-
     nc = size(t%contexts)
-    allocate(tmp(nc*2))
-    tmp(1:nc) = t%contexts
-    call init_context(tmp(nc+1:))
-    t%contexts = tmp
+    allocate(tmp(nc))
+    tmp = t%contexts
+    deallocate(t%contexts)
+    allocate(t%contexts(nc*2))
+    t%contexts(1:nc) = tmp(1:nc)
+    call init_context(t%contexts(nc+1:))
   end subroutine allocate_more_contexts
 
 
@@ -174,7 +188,6 @@ contains
 
     type(timer), pointer :: t
     type(context), pointer :: contexts(:), c
-    integer :: i
 
 
     if (id < 1 .or. id > ntimers) stop "Error: invalid timer id"
@@ -185,7 +198,11 @@ contains
     current_context = ibclr(current_context, id-1)
     c => contexts(t%last_context_index)
     if (c%key .ne. current_context) then
-       stop "Error: tried to stop timer in wrong context!"
+       write (0,*) "Error: tried to stop timer ", trim(t%name), " in wrong context!"
+       write (0,*) "Last context index: ", t%last_context_index
+       write (0,*) "Current context: ", current_context
+       write (0,*) "Old context: ", c%key
+       stop
     end if
 
     if (TIME_TYPE == CPU_TIME_) then
@@ -193,7 +210,7 @@ contains
        c%tsum = c%tsum + c%tstop-c%tstart
     else if (TIME_TYPE == SYSTEM_CLOCK_) then
        call system_clock(c%itstop)
-       c%tsum = c%tsum + (c%itstop-c%itstart)*SYS_TIME_CONV
+       c%tsum = c%tsum + (c%itstop-c%itstart)/real(count_rate,kind(1.d0))
     else
        stop "Error in timers.f90: invalid time_type"
     end if
@@ -209,14 +226,14 @@ contains
 
     type(timer),   pointer :: t
     type(context), pointer :: c
-    real    :: tstop
+    real(8)    :: tstop
     integer :: itstop, i
     logical :: running
     integer(8) :: parent_context
 
     if (id < 1 .or. id > ntimers) stop "Error: invalid timer id"
     t => timers(id)
-    
+
     running = btest(current_context,id-1)
     parent_context = ibclr(current_context,id-1)
 
@@ -231,7 +248,7 @@ contains
                 time = time + tstop-c%tstart
              else if (TIME_TYPE == SYSTEM_CLOCK_) then
                 call system_clock(itstop)
-                time = time + (itstop-c%itstart)*SYS_TIME_CONV
+                time = time + (itstop-c%itstart)/real(count_rate,kind(1.d0))
              else
                 stop "Error in timers.f90: invalid time_type"
              end if
@@ -248,15 +265,13 @@ contains
     type(timer), pointer   :: t
     type(context), pointer :: c
 
-    real(8) :: time
+    real(8) :: time, t1
     integer(8) :: ncalls
 
-    write (unit,'(a,t4,a,t52,a,t68,a,t80,a)') &
+    write (unit,'(a2,tr1,a46,tr2,a14,tr2,a10,tr2,a12)') &
          "id", "Timer name                                    ", &
-         "total time (s)", "# of calls", "running?"
-    write (unit,'(a,t4,a,t52,a,t68,a,t80,a)') &
-         "**", "**********************************************", &
-         "**************", "**********", "********"
+         "total time (s)", "# of calls", "% of timer 1"
+    write (unit,'(2("*"),tr1,46("*"),tr2,14("*"),tr2,10("*"),tr2,12("*"))')
     do id=1,ntimers
        t => timers(id)
        time = 0.d0
@@ -268,8 +283,11 @@ contains
              ncalls = ncalls + c%ncalls
           end if
        end do
-       write (unit,'(i0,t4,a,t52,f14.4,t68,i0,t80,l)') &
-            t%id, t%name, time, ncalls, btest(current_context,id-1)
+       if (id == 1) t1 = time
+       !write (unit,'(i0,t4,a,t52,f14.4,t68,i0,t80,l)') &
+       !     t%id, t%name, time, ncalls, btest(current_context,id-1)
+       write (unit,'(i2,tr1,a46,tr2,f14.4,tr2,i10,tr2,f11.2,"%")') &
+            t%id, t%name, time, ncalls, time/t1 * 100.d0
     end do
   end subroutine print_all_timers_flat
 
@@ -277,12 +295,13 @@ contains
   recursive subroutine print_all_timers_aux(unit,icontext,depth,nsub,tsub,prnt)
     ! This might be slow for larger numbers of timers.
     implicit none
-    integer, intent(in)  :: unit,icontext,depth
-    integer, intent(out) :: nsub
-    real(8), intent(out) :: tsub
-    logical, intent(in)  :: prnt
+    integer,    intent(in)  :: unit,depth
+    integer(8), intent(in)  :: icontext
+    integer,    intent(out) :: nsub
+    real(8),    intent(out) :: tsub
+    logical,    intent(in)  :: prnt
 
-    integer :: isubcontext, k
+    integer(8) :: isubcontext
     integer :: id, ic, nsub1
     real(8) :: tsub1, tinternal
     type(timer),   pointer   :: t
@@ -302,8 +321,8 @@ contains
              isubcontext = ibset(icontext,id-1)
              if (prnt) then
                 write (str,'(a,a)') spaces(1:depth*2), trim(t%name)
-                write (unit,'(i0,t4,a,t52,f14.4,t68,i0,t80,"0x",z4.4)') &
-                     id, str, c%tsum, c%ncalls, c%key
+                write (unit,'(i0,t4,a,t52,f14.4,t68,i0)') &
+                     id, str, c%tsum, c%ncalls
              end if
              ! Add up the amount of time spent in subtimers
              call print_all_timers_aux(unit,isubcontext,depth+1,nsub1,tsub1,.false.)
@@ -311,8 +330,8 @@ contains
                 ! Print amount of time spent in this timer, and not in subtimers
                 tinternal = c%tsum - tsub1
                 write (str,'(a,a)') spaces(1:(depth+1)*2), '(internal)'
-                write (unit,'(a,t4,a,t52,f14.4,t68,a,t80,"0x",z4.4)') &
-                     '', str, tinternal, '', icontext
+                write (unit,'(a,t4,a,t52,f14.4,t68,a)') &
+                     '', str, tinternal, ''
              end if
              ! Print all the subtimers
              call print_all_timers_aux(unit,isubcontext,depth+1,nsub1,tsub1,prnt)
@@ -329,14 +348,14 @@ contains
     integer :: nsub
     real(8) :: tsub
 
-    write (unit,'(a,t4,a,t52,a,t68,a,t80,a)') &
+    write (unit,'(a,t4,a,t52,a,t68,a)') &
          "id", "Timer name                                    ", &
-         "total time (s)", "# of calls", "context"
-    write (unit,'(a,t4,a,t52,a,t68,a,t80,a)') &
+         "total time (s)", "# of calls"
+    write (unit,'(a,t4,a,t52,a,t68,a)') &
          "**", "**********************************************", &
-         "**************", "**********", "********"
+         "**************", "**********"
 
-    call print_all_timers_aux(unit,0,0,nsub,tsub,.true.)
+    call print_all_timers_aux(unit,0_8,0,nsub,tsub,.true.)
   end subroutine print_all_timers
 
 
@@ -376,19 +395,17 @@ contains
     end do
     call stop_timer(id3)
 
-    call stop_timer(id1)
-
     call start_timer(id3)
     do k = 1,1000
        do i=1,1000000
           j = j + i
        end do
     end do
-
     t3 = get_time(id3)
     write (*,*) "Time in id3: ", t3
-
     call stop_timer(id3)
+
+    call stop_timer(id1)
 
     call print_all_timers_flat(6)
     write (6,*) ""

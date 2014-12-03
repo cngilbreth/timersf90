@@ -1,9 +1,4 @@
-include $(HOME)/Projects/make.inc
-
-# Set afmc version string here -- it will be compiled in
-AFMC_VER=1.16.0b
-
-FC := $(MPIFC) -DTEST_TIMERS
+FC := gfortran -g -fbounds-check -fbacktrace -DTEST_TIMERS
 
 ################################################################################
 # Targets
@@ -19,7 +14,7 @@ timers: ${OBJ1}
 	${FC} -o $@ $+
 
 clean:
-	/bin/rm -f *.o *.mod camc build/*.o mod/*.mod version.h ../camc
+	rm -f *.o *.mod timers
 
 ################################################################################
 # Object files
