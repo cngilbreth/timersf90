@@ -1,4 +1,5 @@
-FC := gfortran -g -fbounds-check -fbacktrace -DTEST_TIMERS
+#FC := gfortran -g -fbounds-check -fbacktrace
+FC := gfortran -g
 
 ################################################################################
 # Targets
@@ -8,18 +9,19 @@ vpath %.o build
 vpath %.mod mod
 vpath %.f90 ./
 
-OBJ1=timers.o
+OBJ1=timers.o test.o
 
 timers: ${OBJ1}
 	${FC} -o $@ $+
 
 clean:
-	rm -f *.o *.mod timers
+	rm -f *.o build/*.o *.mod timers
 
 ################################################################################
 # Object files
 ################################################################################
 
+build/test.o: timers.o
 build/timers.o:
 
 ################################################################################

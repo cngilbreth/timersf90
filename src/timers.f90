@@ -48,7 +48,7 @@ module mod_timers
      ! When this timer is running, this is the index of the relevant context in
      ! contexts(:). When not running, this is the index of the last context in
      ! which it was executed.
-     integer :: last_context_index
+     integer :: context_index
   end type timer
 
   integer :: ntimers = 0
@@ -95,7 +95,7 @@ contains
     t%name = name
     allocate(t%contexts(4))
     call init_context(t%contexts)
-    t%last_context_index = 1
+    t%context_index = 1
   end subroutine add_timer
 
 
@@ -174,7 +174,7 @@ contains
        stop "Error in timers.f90: invalid time_type"
     end if
 
-    t%last_context_index = i
+    t%context_index = i
     c%ncalls = c%ncalls + 1
   end subroutine start_timer
 
@@ -185,6 +185,9 @@ contains
 
     type(context), allocatable :: tmp(:)
     integer :: nc
+
+    ! There's an extra temporary array here because we're using allocatable
+    ! arrays, not pointers.
     nc = size(t%contexts)
     allocate(tmp(nc))
     tmp = t%contexts
@@ -202,19 +205,17 @@ contains
     type(timer), pointer :: t
     type(context), pointer :: contexts(:), c
 
-
     if (id < 1 .or. id > ntimers) stop "Error: invalid timer id"
     t => timers(id)
     if (.not. btest(current_context,id-1)) stop "Error: timer already stopped"
     contexts => t%contexts
 
     current_context = ibclr(current_context, id-1)
-    c => contexts(t%last_context_index)
+    c => contexts(t%context_index)
     if (c%key .ne. current_context) then
        write (0,*) "Error: tried to stop timer ", trim(t%name), " in wrong context!"
-       write (0,*) "Last context index: ", t%last_context_index
-       write (0,*) "Current context: ", current_context
-       write (0,*) "Old context: ", c%key
+       write (0,*) "Timer's context: ", c%key
+       write (0,*) "Expected context: ", current_context
        stop
     end if
 
@@ -227,7 +228,6 @@ contains
     else
        stop "Error in timers.f90: invalid time_type"
     end if
-
   end subroutine stop_timer
 
 
@@ -240,34 +240,35 @@ contains
     type(timer),   pointer :: t
     type(context), pointer :: c
     real(8)    :: tstop
-    integer :: itstop, i
+    integer(8) :: itstop
+    integer :: i
     logical :: running
     integer(8) :: parent_context
 
-    if (id < 1 .or. id > ntimers) stop "Error: invalid timer id"
+    if (id < 1 .or. id > ntimers) stop "Error: get_time(): invalid timer id"
     t => timers(id)
-
-    running = btest(current_context,id-1)
-    parent_context = ibclr(current_context,id-1)
 
     time = 0.d0
     do i=1,size(t%contexts)
        c => t%contexts(i)
        if (c%key >= 0) then
           time = time + c%tsum
-          if (running .and. c%key == parent_context) then
-             if (TIME_TYPE == CPU_TIME_) then
-                call cpu_time(tstop)
-                time = time + tstop-c%tstart
-             else if (TIME_TYPE == SYSTEM_CLOCK_) then
-                call system_clock(itstop)
-                time = time + (itstop-c%itstart)/real(count_rate,kind(1.d0))
-             else
-                stop "Error in timers.f90: invalid time_type"
-             end if
-          end if
        end if
     end do
+
+    running = btest(current_context,id-1)
+    if (running) then
+       c => t%contexts(t%context_index)
+       if (TIME_TYPE == CPU_TIME_) then
+          call cpu_time(tstop)
+          time = time + tstop-c%tstart
+       else if (TIME_TYPE == SYSTEM_CLOCK_) then
+          call system_clock(itstop)
+          time = time + (itstop-c%itstart)/real(count_rate,kind(1.d0))
+       else
+          stop "Error in timers.f90: invalid time_type"
+       end if
+    end if
   end function get_time
 
 
@@ -401,77 +402,4 @@ contains
     call print_all_timers_aux(unit,0_8,0,nsub,tsub,total,.true.)
   end subroutine print_all_timers
 
-
-  subroutine test_timers()
-    ! Not an automated test. Just some scratch code to try it out.
-    implicit none
-
-    integer :: id1,id2,id3,id4, j=0,i,k
-    real(8) :: t3
-
-    call add_timer("outer timer",id1)
-    call add_timer("inner timer",id2)
-    call add_timer("inner timer 2",id3)
-    call add_timer("outer timer 2",id4)
-
-    call start_timer(id1)
-
-    do k = 1,1000
-       do i=1,1000000
-          j = j + i
-       end do
-    end do
-
-    call start_timer(id2)
-
-    do k = 1,10000
-       call start_timer(id3)
-       call stop_timer(id3)
-    end do
-
-    call stop_timer(id2)
-
-    call start_timer(id3)
-    do k = 1,1000
-       do i=1,1000000
-          j = j + i
-       end do
-    end do
-    call stop_timer(id3)
-
-    call start_timer(id3)
-    do k = 1,1000
-       do i=1,1000000
-          j = j + i
-       end do
-    end do
-    t3 = get_time(id3)
-    write (*,*) "Time in id3: ", t3
-    call stop_timer(id3)
-
-    call stop_timer(id1)
-
-    call start_timer(id4)
-    do k = 1,1000
-       do i=1,500000
-          j = j + i
-       end do
-    end do
-    call stop_timer(id4)
-
-    call print_all_timers_flat(6)
-    write (6,*) ""
-    call print_all_timers(6)
-    call clear_timers()
-  end subroutine test_timers
-
-
 end module mod_timers
-
-
-#ifdef TEST_TIMERS
-program test
-  use mod_timers
-  call test_timers()
-end program test
-#endif
