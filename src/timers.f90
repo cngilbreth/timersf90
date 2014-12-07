@@ -16,7 +16,7 @@ module mod_timers
   !  2. system_clock measures walltime
   ! cpu_time is probably preferred.
   integer, parameter :: CPU_TIME_ = 1, SYSTEM_CLOCK_ = 2
-  integer, parameter :: TIME_TYPE = CPU_TIME_
+  integer, parameter :: TIME_TYPE = SYSTEM_CLOCK_
   integer(8) :: count_rate  ! Conversion for system_clock()
 
 
@@ -315,6 +315,9 @@ contains
          "id", "Timer name                                    ", &
          "# of calls", "time (s)", "% total"
     write (unit,'(2("*"),tr1,46("*"),tr2,10("*"),tr2,12("*"),tr2,7("*"))')
+    write (unit,'(2x,tr1,a,tr41,tr2,a10,tr2,f12.4,tr2,f6.2,"%")') &
+            "TOTAL", "-", total, 100.d0
+
     do id=1,ntimers
        t => timers(id)
        time = 0.d0
@@ -398,6 +401,8 @@ contains
          "id", "Timer name                                    ", &
          "# of calls", "time (s)", "% total"
     write (unit,'(2("*"),tr1,46("*"),tr2,10("*"),tr2,12("*"),tr2,7("*"))')
+    write (unit,'(2x,tr1,a,tr41,tr2,a10,tr2,f12.4,tr2,f6.2,"%")') &
+            "TOTAL", "-", total, 100.d0
 
     call print_all_timers_aux(unit,0_8,0,nsub,tsub,total,.true.)
   end subroutine print_all_timers
