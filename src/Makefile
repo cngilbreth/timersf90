@@ -1,5 +1,5 @@
 #FC := gfortran -g -fbounds-check -fbacktrace
-FC := gfortran -g
+FC := gfortran -Wall -g
 
 ################################################################################
 # Targets

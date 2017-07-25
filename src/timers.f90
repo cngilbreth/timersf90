@@ -3,22 +3,42 @@
 ! - Handles nested calls of timers and provides a detailed printout with
 !   percentages of the "total" time (defined as the time spent in all outermost
 !   contexts).
-! - Supports up to 63 timers
-! - To use: Call add_timer(), start_timer(), stop_timer(),
-!   print_all_timers_flat(), and print_all_timers(). See example at the bottom.
-! C.N.G 2010, 2014
+! - Currently supports up to 63 timers.
+!
+! - Main user-callable routines:
+!     add_timer()         - Register a new timer
+!     start_timer()       - Start a timer
+!     stop_timer()        - Stop a timer
+!     print_all_timers()  - Print a nested list of all timers (shows call
+!                           hierarchy)
+!     print_all_timers_flat()  - Print all timers in a flat list
+!     get_time()          - Get the time elapsed for a particular timer
+!
+! Authors
+!   Christopher Gilbreth, 2010, 2014, 2017
 module mod_timers
   implicit none
   save
 
-  ! There are two ways to record the time:
-  !  1. cpu_time measures CPU time (excludes time spent in other programs)
-  !  2. system_clock measures walltime
-  ! cpu_time is probably preferred.
   integer, parameter :: CPU_TIME_ = 1, SYSTEM_CLOCK_ = 2
-  integer, parameter :: TIME_TYPE = SYSTEM_CLOCK_
-  integer(8) :: count_rate  ! Conversion for system_clock()
 
+
+  ! -- USER-ADJUSTABLE PARAMETERS ----------------------------------------------
+
+  ! There are two ways to record the time:
+  !  1. cpu_time measures CPU time
+  !  2. system_clock measures walltime.
+  ! Adjust TIME_TYPE as desired.
+  integer, parameter :: TIME_TYPE = SYSTEM_CLOCK_
+
+  ! Only print timers consuming >= print_thresh percent of the "total" time.
+  real*8, parameter :: prnt_thresh = 0.5d0
+
+  ! ----------------------------------------------------------------------------
+
+
+  ! Conversion for system_clock()
+  integer(8) :: count_rate
 
   ! Timing info for a timer in a particular context.
   ! When a timer is started, there are usually other timers going already.
@@ -243,7 +263,6 @@ contains
     integer(8) :: itstop
     integer :: i
     logical :: running
-    integer(8) :: parent_context
 
     if (id < 1 .or. id > ntimers) stop "Error: get_time(): invalid timer id"
     t => timers(id)
@@ -299,7 +318,7 @@ contains
     type(timer), pointer   :: t
     type(context), pointer :: c
 
-    real(8) :: time, total
+    real(8) :: time, total, tpercent
     integer(8) :: ncalls
 
     if (current_context .ne. 0) then
@@ -316,7 +335,7 @@ contains
          "# of calls", "time (s)", "% total"
     write (unit,'(2("*"),tr1,46("*"),tr2,10("*"),tr2,12("*"),tr2,7("*"))')
     write (unit,'(2x,tr1,a,tr41,tr2,a10,tr2,f12.4,tr2,f6.2,"%")') &
-            "TOTAL", "-", total, 100.d0
+         "TOTAL", "-", total, 100.d0
 
     do id=1,ntimers
        t => timers(id)
@@ -329,8 +348,11 @@ contains
              ncalls = ncalls + c%ncalls
           end if
        end do
-       write (unit,'(i2,tr1,a46,tr2,i10,tr2,f12.4,tr2,f6.2,"%")') &
-            t%id, t%name, ncalls, time, time/total * 100.d0
+       tpercent = time/total * 100.d0
+       if (tpercent .ge. prnt_thresh) then
+          write (unit,'(i2,tr1,a46,tr2,i10,tr2,f12.4,tr2,f6.2,"%")') &
+               t%id, t%name, ncalls, time, tpercent
+       end if
     end do
   end subroutine print_all_timers_flat
 
@@ -348,7 +370,7 @@ contains
 
     integer(8) :: isubcontext
     integer :: id, ic, nsub1
-    real(8) :: tsub1, tinternal
+    real(8) :: tsub1, tinternal, tpercent
     type(timer),   pointer   :: t
     type(context), pointer :: c
 
@@ -365,9 +387,12 @@ contains
              tsub = tsub + c%tsum
              isubcontext = ibset(icontext,id-1)
              if (prnt) then
-                write (str,'(a,a)') spaces(1:depth*2), trim(t%name)
-                write (unit,'(i2,tr1,a46,tr2,i10,tr2,f12.4,tr2,f6.2,"%")') &
-                     id, str, c%ncalls, c%tsum, c%tsum/total*100.d0
+                tpercent = c%tsum/total*100.d0
+                if (tpercent .ge. prnt_thresh) then
+                   write (str,'(a,a)') spaces(1:depth*2), trim(t%name)
+                   write (unit,'(i2,tr1,a46,tr2,i10,tr2,f12.4,tr2,f6.2,"%")') &
+                        id, str, c%ncalls, c%tsum, tpercent
+                end if
              end if
              ! Add up the amount of time spent in subtimers
              call print_all_timers_aux(unit,isubcontext,depth+1,nsub1,tsub1,&
@@ -375,9 +400,12 @@ contains
              if (nsub1 > 0 .and. prnt) then
                 ! Print amount of time spent in this timer, and not in subtimers
                 tinternal = c%tsum - tsub1
-                write (str,'(a,a)') spaces(1:(depth+1)*2), '(internal)'
-                write (unit,'(a2,tr1,a46,tr2,a10,tr2,f12.4,tr2,f6.2,"%")') &
-                     '', str, '-', tinternal, tinternal/total*100.d0
+                tpercent = tinternal/total*100.d0
+                if (tpercent .ge. prnt_thresh) then
+                   write (str,'(a,a)') spaces(1:(depth+1)*2), '(internal)'
+                   write (unit,'(a2,tr1,a46,tr2,a10,tr2,f12.4,tr2,f6.2,"%")') &
+                        '', str, '-', tinternal, tpercent
+                end if
              end if
              ! Print all the subtimers
              call print_all_timers_aux(unit,isubcontext,depth+1,nsub1,tsub1,&
@@ -402,7 +430,7 @@ contains
          "# of calls", "time (s)", "% total"
     write (unit,'(2("*"),tr1,46("*"),tr2,10("*"),tr2,12("*"),tr2,7("*"))')
     write (unit,'(2x,tr1,a,tr41,tr2,a10,tr2,f12.4,tr2,f6.2,"%")') &
-            "TOTAL", "-", total, 100.d0
+         "TOTAL", "-", total, 100.d0
 
     call print_all_timers_aux(unit,0_8,0,nsub,tsub,total,.true.)
   end subroutine print_all_timers
