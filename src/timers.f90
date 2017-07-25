@@ -58,7 +58,7 @@ module mod_timers
 
 
   ! Conversion for system_clock()
-  integer(8) :: count_rate
+  integer(8) :: count_rate = 0
 
   ! Timing info for a timer in a particular context.
   ! When a timer is started, there are usually other timers going already.
